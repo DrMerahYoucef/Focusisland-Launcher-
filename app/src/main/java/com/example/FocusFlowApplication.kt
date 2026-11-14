@@ -1,0 +1,256 @@
+package com.example
+
+import android.app.Activity
+import android.app.Application
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.Bundle
+import android.os.PowerManager
+import android.util.Log
+import androidx.core.content.ContextCompat
+import com.example.data.auth.AuthRepository
+import com.example.data.challenge.FriendChallengeRepository
+import com.example.data.db.AppDatabase
+import com.example.data.repository.BlockedAppRepository
+import com.example.data.repository.ExamRepository
+import com.example.data.repository.LauncherRepository
+import com.example.data.repository.RevisionRepository
+import com.example.data.repository.SessionRepository
+import com.example.service.PomodoroTimerService
+import com.example.service.RevisionReminderWorker
+import com.example.service.RevisionSyncWorker
+import com.example.widget.WidgetRefreshScheduler
+import com.google.firebase.FirebaseApp
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+
+class FocusFlowApplication : Application() {
+
+    /** Lives as long as the process. For work that must outlive a screen (sync, widget refresh). */
+    val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    val database by lazy { AppDatabase.getDatabase(this) }
+    val sessionRepository by lazy {
+        SessionRepository(
+            sessionDao = database.sessionDao(),
+            appScope = applicationScope,
+            onSessionsChanged = { WidgetRefreshScheduler.refreshNow(this) }
+        )
+    }
+    val examRepository by lazy { ExamRepository(database.examDao()) }
+    val blockedAppRepository by lazy { BlockedAppRepository(database.blockedAppDao()) }
+    val launcherRepository by lazy { LauncherRepository(this, database.allowedAppDao()) }
+    val revisionRepository by lazy { RevisionRepository(database) }
+    val challengeStore by lazy { com.example.data.challenge.ChallengeStore(this) }
+    val friendChallengeRepository by lazy {
+        FriendChallengeRepository(
+            context = this,
+            sessionDao = database.sessionDao(),
+            appScope = applicationScope
+        )
+    }
+    val geminiModels by lazy { com.example.data.repository.GeminiModels(getSharedPreferences("focusflow_prefs", MODE_PRIVATE)) }
+
+    /** Account + guest mode. After a real sign-in, local sessions and cards are pushed to the account. */
+    val authRepository by lazy {
+        AuthRepository(this, applicationScope) {
+            sessionRepository.syncWithFirestore()
+            RevisionSyncWorker.scheduleSyncWork(this)
+        }
+    }
+
+    private var startedActivitiesCount = 0
+    private var autoPauseJob: kotlinx.coroutines.Job? = null
+
+    val isAppInForeground: Boolean
+        get() = startedActivitiesCount > 0
+
+    override fun onCreate() {
+        super.onCreate()
+        instance = this
+
+        // Firebase is configured from google-services.json by the Google Services plugin.
+        // FirebaseInitProvider normally initializes it already; this is a safety net only.
+        try {
+            if (FirebaseApp.getApps(this).isEmpty()) FirebaseApp.initializeApp(this)
+        } catch (e: Exception) {
+            Log.e(TAG, "Firebase initialization failed", e)
+        }
+
+        // Eagerly initialize friendChallengeRepository so active challenge listeners and auto-start work app-wide
+        runCatching { friendChallengeRepository }
+
+        installPhoneLockCrashGuard()
+        registerAppSwitchAutoPause()
+        registerPackageUpdates()
+        applicationScope.launch {
+            runCatching { launcherRepository.refreshInstalledApps(seedEssentialsIfFirstRun = true) }
+        }
+
+        try {
+            RevisionReminderWorker.createNotificationChannel(this)
+            RevisionSyncWorker.schedulePeriodicSyncWork(this)
+            WidgetRefreshScheduler.scheduleNextMidnight(this)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to schedule background work", e)
+        }
+    }
+
+    /**
+     * Prevents an unexpected UI/WindowManager/Activity exception from terminating the process
+     * and bypassing lock mode while a strict Lock Phone challenge is active.
+     */
+    private fun installPhoneLockCrashGuard() {
+        val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            val activeLock = runCatching {
+                val active = challengeStore.state.value.active
+                active != null && active.isLockPhone && System.currentTimeMillis() < active.endAt
+            }.getOrDefault(false)
+
+            if (activeLock && throwable !is OutOfMemoryError) {
+                Log.e(TAG, "Suppressed exception during active Lock Phone challenge to prevent lock bypass", throwable)
+                if (thread == android.os.Looper.getMainLooper().thread) {
+                    while (true) {
+                        try {
+                            com.example.service.PhoneLockOverlayManager.syncWithActiveChallenge(this@FocusFlowApplication)
+                            android.os.Looper.loop()
+                        } catch (inner: Throwable) {
+                            if (inner is OutOfMemoryError) {
+                                previousHandler?.uncaughtException(thread, inner)
+                                break
+                            }
+                            Log.e(TAG, "Recovered main looper during active Lock Phone challenge", inner)
+                        }
+                    }
+                    return@setDefaultUncaughtExceptionHandler
+                }
+                return@setDefaultUncaughtExceptionHandler
+            }
+            previousHandler?.uncaughtException(thread, throwable)
+        }
+    }
+
+    /**
+     * Automatically pauses the Pomodoro timer when the user leaves Focus Island for another app
+     * (while the device screen is interactive and unlocked), and automatically resumes it when returning.
+     * Locking the phone keeps the Pomodoro running uninterrupted.
+     */
+    private fun registerAppSwitchAutoPause() {
+        registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
+            override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
+            override fun onActivityResumed(activity: Activity) = Unit
+            override fun onActivityPaused(activity: Activity) = Unit
+            override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
+            override fun onActivityDestroyed(activity: Activity) = Unit
+
+            override fun onActivityStarted(activity: Activity) {
+                autoPauseJob?.cancel()
+                autoPauseJob = null
+                if (activity is FocusOverlayActivity) {
+                    com.example.service.FloatingFocusBubbleManager.hidePausedBubble(this@FocusFlowApplication)
+                    com.example.service.FloatingFocusBubbleManager.collapseIsland(this@FocusFlowApplication)
+                    com.example.service.FloatingFocusBubbleManager.syncSystemOverlay(this@FocusFlowApplication)
+                    if (PomodoroTimerService.state.value.isAutoPausedByAppSwitch) {
+                        runCatching {
+                            val intent = Intent(this@FocusFlowApplication, PomodoroTimerService::class.java)
+                                .setAction(PomodoroTimerService.ACTION_AUTO_RESUME)
+                            ContextCompat.startForegroundService(this@FocusFlowApplication, intent)
+                        }
+                    }
+                    return
+                }
+                val wasBackground = startedActivitiesCount == 0
+                startedActivitiesCount++
+                com.example.service.PhoneLockOverlayManager.syncWithActiveChallenge(this@FocusFlowApplication)
+                com.example.service.FloatingFocusBubbleManager.hidePausedBubble(this@FocusFlowApplication)
+                com.example.service.FloatingFocusBubbleManager.hideNudgeBanner(this@FocusFlowApplication)
+                com.example.service.FloatingFocusBubbleManager.collapseIsland(this@FocusFlowApplication)
+                com.example.service.FloatingFocusBubbleManager.syncSystemOverlay(this@FocusFlowApplication)
+                if (wasBackground) {
+                    if (PomodoroTimerService.state.value.isAutoPausedByAppSwitch) {
+                        runCatching {
+                            val intent = Intent(this@FocusFlowApplication, PomodoroTimerService::class.java)
+                                .setAction(PomodoroTimerService.ACTION_AUTO_RESUME)
+                            ContextCompat.startForegroundService(this@FocusFlowApplication, intent)
+                        }.onFailure {
+                            Log.w(TAG, "Failed to auto-resume Pomodoro timer", it)
+                        }
+                    }
+                }
+            }
+
+            override fun onActivityStopped(activity: Activity) {
+                if (activity is FocusOverlayActivity) return
+                startedActivitiesCount = (startedActivitiesCount - 1).coerceAtLeast(0)
+                if (startedActivitiesCount == 0 && !activity.isChangingConfigurations) {
+                    com.example.service.PhoneLockOverlayManager.syncWithActiveChallenge(this@FocusFlowApplication)
+                    com.example.service.FloatingFocusBubbleManager.syncSystemOverlay(this@FocusFlowApplication)
+                    autoPauseJob?.cancel()
+                    autoPauseJob = applicationScope.launch {
+                        // Wait briefly so pressing the Power button to lock the screen has time to
+                        // transition PowerManager.isInteractive to false or engage KeyguardManager,
+                        // and AppLaunchMonitor has time to detect if a blocked app came to the foreground.
+                        kotlinx.coroutines.delay(450L)
+                        if (startedActivitiesCount == 0 && shouldAutoPauseForAppSwitch(this@FocusFlowApplication)) {
+                            val openedAllowedApp = launcherRepository.wasRecentlyLaunchedAllowedApp()
+                            if (openedAllowedApp && !launcherRepository.isPauseOnAllowedAppEnabled()) {
+                                return@launch
+                            }
+                            if (PomodoroTimerService.state.value.isRunning) {
+                                runCatching {
+                                    val intent = Intent(this@FocusFlowApplication, PomodoroTimerService::class.java)
+                                        .setAction(PomodoroTimerService.ACTION_AUTO_PAUSE)
+                                    startService(intent)
+                                }.onFailure {
+                                    Log.w(TAG, "Failed to auto-pause Pomodoro timer", it)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    private fun registerPackageUpdates() {
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_PACKAGE_ADDED)
+            addAction(Intent.ACTION_PACKAGE_REMOVED)
+            addAction(Intent.ACTION_PACKAGE_CHANGED)
+            addAction(Intent.ACTION_PACKAGE_REPLACED)
+            addDataScheme("package")
+        }
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                applicationScope.launch {
+                    runCatching { launcherRepository.refreshInstalledApps(seedEssentialsIfFirstRun = false) }
+                }
+            }
+        }
+        runCatching {
+            ContextCompat.registerReceiver(this, receiver, filter, ContextCompat.RECEIVER_EXPORTED)
+        }
+    }
+
+    internal fun shouldAutoPauseForAppSwitch(context: android.content.Context): Boolean {
+        val pm = context.getSystemService(PowerManager::class.java)
+        val isScreenOn = pm?.isInteractive == true
+        if (!isScreenOn) return false
+        val km = context.getSystemService(android.app.KeyguardManager::class.java)
+        val isLocked = km?.isKeyguardLocked == true || km?.isDeviceLocked == true
+        return !isLocked
+    }
+
+    companion object {
+        private const val TAG = "FocusFlowApplication"
+
+        lateinit var instance: FocusFlowApplication
+            private set
+    }
+}
+

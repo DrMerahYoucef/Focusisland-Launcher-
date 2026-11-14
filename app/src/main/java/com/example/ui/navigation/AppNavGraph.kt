@@ -1,0 +1,870 @@
+package com.example.ui.navigation
+
+import android.content.Intent
+import androidx.activity.compose.BackHandler
+import androidx.annotation.StringRes
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.outlined.Flag
+import androidx.compose.material.icons.outlined.Groups
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Insights
+import androidx.compose.material.icons.outlined.Style
+import androidx.compose.material.icons.outlined.Timer
+import androidx.compose.material.icons.rounded.CloudOff
+import androidx.compose.material.icons.rounded.EmojiEvents
+import androidx.compose.material.icons.rounded.Event
+import androidx.compose.material.icons.rounded.Explore
+import androidx.compose.material.icons.rounded.Flag
+import androidx.compose.material.icons.rounded.Groups
+import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.Insights
+import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Style
+import androidx.compose.material.icons.rounded.Timer
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavHostController
+import androidx.navigation.NavType
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
+import com.example.FocusFlowApplication
+import com.example.R
+import com.example.data.auth.AccountState
+import com.example.ui.components.DynamicSpotIslandOverlay
+import com.example.ui.components.ForestViewModel
+import com.example.ui.designsystem.EmptyState
+import com.example.ui.screen.analytics.AnalyticsScreen
+import com.example.ui.screen.analytics.AnalyticsViewModel
+import com.example.ui.screen.appblocker.AppBlockerScreen
+import com.example.service.PomodoroTimerService
+import com.example.ui.screen.auth.AuthMode
+import com.example.ui.screen.auth.AuthScreen
+import com.example.ui.screen.challenge.ChallengeViewModel
+import com.example.ui.screen.challenge.ChallengesScreen
+import com.example.ui.screen.community.CommunityScreen
+import com.example.ui.screen.community.CommunityViewModel
+import com.example.ui.screen.exams.ExamsScreen
+import com.example.ui.screen.exams.ExamsViewModel
+import com.example.ui.screen.launcher.AllowedAppsScreen
+import com.example.ui.screen.launcher.LauncherHomeScreen
+import com.example.ui.screen.launcher.LauncherViewModel
+import com.example.ui.screen.radio.RadioScreen
+import com.example.ui.screen.radio.RadioViewModel
+import com.example.ui.screen.revisions.CaptureScreen
+import com.example.ui.screen.revisions.CropEditorScreen
+import com.example.ui.screen.revisions.RevisionDeckDetailScreen
+import com.example.ui.screen.revisions.RevisionNoteDetailScreen
+import com.example.ui.screen.revisions.RevisionSessionScreen
+import com.example.ui.screen.revisions.RevisionsHomeScreen
+import com.example.ui.screen.revisions.RevisionsViewModel
+import com.example.ui.screen.settings.SettingsScreen
+import com.example.ui.screen.settings.StylePickerScreen
+import com.example.ui.screen.settings.SettingsViewModel
+import com.example.ui.screen.timer.FocusModeScreen
+import com.example.ui.screen.timer.TimerScreen
+import com.example.ui.screen.timer.TimerViewModel
+import com.example.ui.theme.Spacing
+import kotlinx.coroutines.launch
+import java.net.URLDecoder
+import java.net.URLEncoder
+
+/** Every route in one place. Arguments are always URL-encoded. */
+object Routes {
+    /** Welcome / sign-in. Plain "auth" also matches (mode then defaults to sign in). */
+    const val AUTH = "auth?mode={mode}"
+    const val MAIN = "main"
+    const val SETTINGS = "settings"
+    const val RADIO = "radio"
+    const val FOCUS_MODE = "battery_saver"      // route id kept for stability
+    const val EXAMS = "exams"
+    const val APP_BLOCKER = "app_blocker"
+    const val ALLOWED_APPS = "allowed_apps"
+    const val CHALLENGES = "challenges"
+    const val STYLE = "style"
+    const val CAPTURE = "revisions/capture"
+    const val CROP = "revisions/crop?path={path}&whole={whole}"
+    const val SESSION = "revisions/session?deckId={deckId}"
+    const val DECK = "revisions/deck/{deckId}"
+    const val NOTE = "revisions/note/{noteId}"
+
+    fun auth(mode: AuthMode) = "auth?mode=${mode.key}"
+    /** [whole]: the photo is an already-cropped scan, so start with the whole page selected. */
+    fun crop(path: String, whole: Boolean = false) = "revisions/crop?path=${URLEncoder.encode(path, "UTF-8")}&whole=$whole"
+    fun session(deckId: String) = "revisions/session?deckId=${URLEncoder.encode(deckId, "UTF-8")}"
+    fun deck(deckId: String) = "revisions/deck/${URLEncoder.encode(deckId, "UTF-8")}"
+    fun note(noteId: String) = "revisions/note/${URLEncoder.encode(noteId, "UTF-8")}"
+}
+
+/** Top-level destinations: Launcher Home followed by the five Focus workspace tabs. */
+enum class TopLevel(
+    val key: String,
+    @param:StringRes val label: Int,
+    val selectedIcon: ImageVector,
+    val icon: ImageVector
+) {
+    HOME("home", R.string.nav_home, Icons.Rounded.Home, Icons.Outlined.Home),
+    FOCUS("focus", R.string.nav_focus, Icons.Rounded.Timer, Icons.Outlined.Timer),
+    STUDY("study", R.string.nav_study, Icons.Rounded.Style, Icons.Outlined.Style),
+    CHALLENGES("challenges", R.string.nav_challenges, Icons.Rounded.Flag, Icons.Outlined.Flag),
+    PROGRESS("progress", R.string.nav_progress, Icons.Rounded.Insights, Icons.Outlined.Insights),
+    COMMUNITY("community", R.string.nav_community, Icons.Rounded.Groups, Icons.Outlined.Groups);
+
+    companion object {
+        val workspaceTabs: List<TopLevel> = listOf(FOCUS, STUDY, CHALLENGES, PROGRESS, COMMUNITY)
+
+        /** Accepts new keys and the legacy notification value "revisions". */
+        fun fromKey(key: String?): TopLevel? = when (key) {
+            null -> null
+            "launcher", "home" -> HOME
+            "revisions", "review" -> STUDY
+            "challenge", "challenges", "defi", "defis" -> CHALLENGES
+            "exams", "stats" -> PROGRESS
+            else -> entries.firstOrNull { it.key == key }
+        }
+    }
+}
+
+/** A deep-link request from MainActivity (notification, widget, Home button, or lock-screen wake). [token] makes repeats distinct. */
+data class NavRequest(
+    val tab: TopLevel,
+    val progressTab: Int = 0,
+    val openFocusMode: Boolean = false,
+    val closeDrawer: Boolean = false,
+    val token: Long = System.nanoTime()
+)
+
+@Composable
+fun AppNavGraph(
+    settingsViewModel: SettingsViewModel,
+    launchedAsHome: Boolean = false,
+    navRequest: NavRequest? = null,
+    onConsumeNavRequest: () -> Unit = {},
+    navController: NavHostController = rememberNavController()
+) {
+    // Activity-scoped view models shared by tabs and their detail screens.
+    val launcherViewModel: LauncherViewModel = viewModel()
+    val timerViewModel: TimerViewModel = viewModel()
+    val radioViewModel: RadioViewModel = viewModel()
+    val analyticsViewModel: AnalyticsViewModel = viewModel()
+    val examsViewModel: ExamsViewModel = viewModel()
+    val revisionsViewModel: RevisionsViewModel = viewModel()
+    val challengeViewModel: ChallengeViewModel = viewModel()
+
+    // Keeps the "auto-sync wallpaper with theme" feature working app-wide.
+    val forestViewModel: ForestViewModel = viewModel()
+    val systemDark = isSystemInDarkTheme()
+    LaunchedEffect(systemDark) { forestViewModel.updateSystemDarkTheme(systemDark) }
+
+    val context = LocalContext.current
+    val friendChallengeState by challengeViewModel.friendState.collectAsStateWithLifecycle()
+    var localNavRequest by remember { mutableStateOf<NavRequest?>(null) }
+    val effectiveNavRequest = localNavRequest ?: navRequest
+    val consumeNav: () -> Unit = {
+        if (localNavRequest != null) {
+            localNavRequest = null
+        } else {
+            onConsumeNavRequest()
+        }
+    }
+
+    // Signed-in accounts (and Home launcher invocations) skip the welcome screen.
+    val authRepository = remember { FocusFlowApplication.instance.authRepository }
+    val accountState by authRepository.state.collectAsStateWithLifecycle()
+    val startDestination = remember { if (authRepository.canEnterApp || launchedAsHome) Routes.MAIN else Routes.AUTH }
+
+    LaunchedEffect(accountState) {
+        if (accountState != AccountState.SignedOut &&
+            navController.currentDestination?.route?.startsWith("auth") == true
+        ) {
+            navController.navigate(Routes.MAIN) { popUpTo(Routes.AUTH) { inclusive = true } }
+        }
+    }
+
+    Box(Modifier.fillMaxSize()) {
+    NavHost(
+        navController = navController,
+        startDestination = startDestination,
+        enterTransition = { slideInHorizontally { it / 6 } + fadeIn() },
+        exitTransition = { fadeOut() },
+        popEnterTransition = { fadeIn() },
+        popExitTransition = { slideOutHorizontally { it / 6 } + fadeOut() }
+    ) {
+        composable(
+            route = Routes.AUTH,
+            arguments = listOf(navArgument("mode") { type = NavType.StringType; defaultValue = AuthMode.SIGN_IN.key })
+        ) {
+            // Opened from inside the app (a guest upgrading): back returns there, success too.
+            val fromInside = remember { navController.previousBackStackEntry != null }
+            AuthScreen(
+                onFinished = {
+                    if (fromInside) {
+                        navController.popBackStack()
+                    } else {
+                        navController.navigate(Routes.MAIN) { popUpTo(Routes.AUTH) { inclusive = true } }
+                    }
+                },
+                onBack = if (fromInside) ({ navController.popBackStack() }) else null
+            )
+        }
+
+        composable(Routes.MAIN) {
+            MainShell(
+                navController = navController,
+                navRequest = effectiveNavRequest,
+                onConsumeNavRequest = consumeNav,
+                settingsViewModel = settingsViewModel,
+                launcherViewModel = launcherViewModel,
+                timerViewModel = timerViewModel,
+                radioViewModel = radioViewModel,
+                analyticsViewModel = analyticsViewModel,
+                examsViewModel = examsViewModel,
+                revisionsViewModel = revisionsViewModel,
+                challengeViewModel = challengeViewModel
+            )
+        }
+
+        composable(Routes.SETTINGS) {
+            SecondaryScreen(title = stringResource(R.string.nav_settings), onBack = { navController.popBackStack() }) { padding ->
+                SettingsScreen(viewModel = settingsViewModel, navController = navController, modifier = Modifier.padding(padding))
+            }
+        }
+
+        composable(Routes.STYLE) {
+            val settings by settingsViewModel.state.collectAsState()
+            // Opening the picker answers the "choose your style" tip.
+            LaunchedEffect(Unit) { settingsViewModel.dismissStyleTip() }
+            SecondaryScreen(title = stringResource(R.string.style_screen_title), onBack = { navController.popBackStack() }) { padding ->
+                StylePickerScreen(current = settings.appStyle, onSelect = settingsViewModel::updateAppStyle, modifier = Modifier.padding(padding))
+            }
+        }
+
+        composable(Routes.RADIO) {
+            RadioScreen(onBack = { navController.popBackStack() })
+        }
+
+        composable(Routes.FOCUS_MODE) {
+            FocusModeScreen(
+                viewModel = timerViewModel,
+                onDismiss = {
+                    onConsumeNavRequest()
+                    if (!navController.popBackStack(Routes.MAIN, inclusive = false)) {
+                        navController.popBackStack()
+                    }
+                },
+                onOpenRadio = {
+                    onConsumeNavRequest()
+                    if (!navController.popBackStack(Routes.MAIN, inclusive = false)) {
+                        navController.popBackStack()
+                    }
+                    navController.navigate(Routes.RADIO)
+                }
+            )
+        }
+
+        composable(Routes.EXAMS) {
+            SecondaryScreen(title = stringResource(R.string.progress_tab_exams), onBack = { navController.popBackStack() }) { padding ->
+                ExamsScreen(viewModel = examsViewModel, modifier = Modifier.padding(padding))
+            }
+        }
+
+        composable(Routes.CHALLENGES) {
+            SecondaryScreen(title = stringResource(R.string.challenges_title), onBack = { navController.popBackStack() }) { padding ->
+                ChallengesScreen(viewModel = challengeViewModel, modifier = Modifier.padding(padding))
+            }
+        }
+
+        composable(Routes.APP_BLOCKER) {
+            AppBlockerScreen(onBack = { navController.popBackStack() })
+        }
+
+        composable(Routes.ALLOWED_APPS) {
+            AllowedAppsScreen(
+                viewModel = launcherViewModel,
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(Routes.CAPTURE) {
+            CaptureScreen(
+                viewModel = revisionsViewModel,
+                onImageCaptured = { path ->
+                    navController.navigate(Routes.crop(path)) { popUpTo(Routes.CAPTURE) { inclusive = true } }
+                },
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(
+            route = Routes.CROP,
+            arguments = listOf(
+                navArgument("path") { type = NavType.StringType; defaultValue = "" },
+                navArgument("whole") { type = NavType.BoolType; defaultValue = false }
+            )
+        ) { entry ->
+            CropEditorScreen(
+                imagePath = URLDecoder.decode(entry.arguments?.getString("path").orEmpty(), "UTF-8"),
+                wholePage = entry.arguments?.getBoolean("whole") ?: false,
+                viewModel = revisionsViewModel,
+                onCropConfirmed = { navController.popBackStack(Routes.MAIN, inclusive = false) },
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(
+            route = Routes.SESSION,
+            arguments = listOf(navArgument("deckId") { type = NavType.StringType; defaultValue = "ALL" })
+        ) { entry ->
+            RevisionSessionScreen(
+                deckId = URLDecoder.decode(entry.arguments?.getString("deckId") ?: "ALL", "UTF-8"),
+                viewModel = revisionsViewModel,
+                onFinishSession = { navController.popBackStack() },
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(
+            route = Routes.DECK,
+            arguments = listOf(navArgument("deckId") { type = NavType.StringType })
+        ) { entry ->
+            RevisionDeckDetailScreen(
+                deckId = URLDecoder.decode(entry.arguments?.getString("deckId").orEmpty(), "UTF-8"),
+                viewModel = revisionsViewModel,
+                onNoteClick = { navController.navigate(Routes.note(it)) },
+                onStartReview = { navController.navigate(Routes.session(it)) },
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(
+            route = Routes.NOTE,
+            arguments = listOf(navArgument("noteId") { type = NavType.StringType })
+        ) { entry ->
+            RevisionNoteDetailScreen(
+                noteId = URLDecoder.decode(entry.arguments?.getString("noteId").orEmpty(), "UTF-8"),
+                viewModel = revisionsViewModel,
+                onBack = { navController.popBackStack() }
+            )
+        }
+    }
+
+    val activeNudge = friendChallengeState.activeNudgeBanner
+    val activeInvite = friendChallengeState.activeInviteBanner
+    val personalChallengeState by challengeViewModel.state.collectAsStateWithLifecycle()
+    val isPhoneLockActive = personalChallengeState.active?.isLockPhone == true
+    val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = navBackStackEntry?.destination?.route
+    val isHiddenRoute = currentRoute == Routes.FOCUS_MODE || currentRoute?.startsWith("auth") == true
+
+    DynamicSpotIslandOverlay(
+        activeInvite = activeInvite,
+        activeNudge = activeNudge,
+        myUid = friendChallengeState.myUid,
+        isPhoneLockActive = isPhoneLockActive,
+        isOnFocusSaverRoute = isHiddenRoute,
+        onAcceptInvite = { invite ->
+            challengeViewModel.acceptFriendChallenge(invite)
+            if (navController.currentDestination?.route != Routes.MAIN) {
+                if (!navController.popBackStack(Routes.MAIN, inclusive = false)) {
+                    navController.navigate(Routes.MAIN) { launchSingleTop = true }
+                }
+            }
+            localNavRequest = NavRequest(tab = TopLevel.CHALLENGES)
+        },
+        onDeclineInvite = { invite ->
+            challengeViewModel.declineFriendChallenge(invite)
+        },
+        onHideInvite = { invite ->
+            challengeViewModel.hideInviteBanner(invite.id)
+        },
+        onReturnFromNudge = {
+            challengeViewModel.dismissNudgeBanner()
+            runCatching {
+                val serviceIntent = Intent(context, PomodoroTimerService::class.java).apply {
+                    action = PomodoroTimerService.ACTION_START
+                }
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    context.startForegroundService(serviceIntent)
+                } else {
+                    context.startService(serviceIntent)
+                }
+            }
+            if (navController.currentDestination?.route != Routes.MAIN) {
+                if (!navController.popBackStack(Routes.MAIN, inclusive = false)) {
+                    navController.navigate(Routes.MAIN) { launchSingleTop = true }
+                }
+            }
+            localNavRequest = NavRequest(tab = TopLevel.FOCUS)
+        },
+        onDismissNudge = challengeViewModel::dismissNudgeBanner,
+        onOpenFocusTab = {
+            if (navController.currentDestination?.route != Routes.MAIN) {
+                if (!navController.popBackStack(Routes.MAIN, inclusive = false)) {
+                    navController.navigate(Routes.MAIN) { launchSingleTop = true }
+                }
+            }
+            localNavRequest = NavRequest(tab = TopLevel.FOCUS)
+        },
+        onOpenChallengesTab = {
+            if (navController.currentDestination?.route != Routes.MAIN) {
+                if (!navController.popBackStack(Routes.MAIN, inclusive = false)) {
+                    navController.navigate(Routes.MAIN) { launchSingleTop = true }
+                }
+            }
+            localNavRequest = NavRequest(tab = TopLevel.CHALLENGES)
+        }
+    )
+    }
+}
+
+/** Top-level shell: Launcher Home (Page 0) + adaptive 5-tab Focus Workspace (Pages 1..5). */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+private fun MainShell(
+    navController: NavHostController,
+    navRequest: NavRequest?,
+    onConsumeNavRequest: () -> Unit,
+    settingsViewModel: SettingsViewModel,
+    launcherViewModel: LauncherViewModel,
+    timerViewModel: TimerViewModel,
+    radioViewModel: RadioViewModel,
+    analyticsViewModel: AnalyticsViewModel,
+    examsViewModel: ExamsViewModel,
+    revisionsViewModel: RevisionsViewModel,
+    challengeViewModel: ChallengeViewModel
+) {
+    val settings by settingsViewModel.state.collectAsState()
+    val personalChallengeState by challengeViewModel.state.collectAsStateWithLifecycle()
+    val isPhoneLockActive = personalChallengeState.active?.isLockPhone == true
+    val friendChallengeState by challengeViewModel.friendState.collectAsStateWithLifecycle()
+    val pendingInviteCount = friendChallengeState.incomingPending.size
+    val tabs = TopLevel.entries
+    val workspaceTabs = TopLevel.workspaceTabs
+    val pagerState = rememberPagerState(initialPage = TopLevel.HOME.ordinal, pageCount = { tabs.size })
+    val scope = rememberCoroutineScope()
+    var progressTab by rememberSaveable { mutableIntStateOf(0) }
+    var drawerOpen by rememberSaveable { mutableStateOf(false) }
+    val current = tabs[pagerState.currentPage]
+    val wide = LocalConfiguration.current.screenWidthDp >= 600
+    val isImeVisible = WindowInsets.isImeVisible
+
+    // Pressing Back in any workspace tab returns to Launcher Home instead of exiting the launcher.
+    BackHandler(enabled = current != TopLevel.HOME && !isPhoneLockActive) {
+        scope.launch { pagerState.animateScrollToPage(TopLevel.HOME.ordinal) }
+    }
+
+    LaunchedEffect(isPhoneLockActive) {
+        if (isPhoneLockActive && pagerState.currentPage != TopLevel.CHALLENGES.ordinal) {
+            drawerOpen = false
+            pagerState.scrollToPage(TopLevel.CHALLENGES.ordinal)
+        }
+    }
+
+    LaunchedEffect(navRequest) {
+        val req = navRequest ?: return@LaunchedEffect
+        onConsumeNavRequest()
+        if (isPhoneLockActive) {
+            drawerOpen = false
+            pagerState.scrollToPage(TopLevel.CHALLENGES.ordinal)
+            return@LaunchedEffect
+        }
+        if (req.closeDrawer) drawerOpen = false
+        if (navController.currentDestination?.route != Routes.MAIN) {
+            navController.popBackStack(Routes.MAIN, inclusive = false)
+        }
+        progressTab = req.progressTab
+        pagerState.scrollToPage(req.tab.ordinal)
+        if (req.openFocusMode && navController.currentDestination?.route != Routes.FOCUS_MODE) {
+            navController.navigate(Routes.FOCUS_MODE) { launchSingleTop = true }
+        }
+    }
+
+    fun select(tab: TopLevel) {
+        if (isPhoneLockActive) return
+        scope.launch { pagerState.scrollToPage(tab.ordinal) }
+    }
+
+    Row(Modifier.fillMaxSize()) {
+        if (wide && current != TopLevel.HOME && !isPhoneLockActive) {
+            NavigationRail(containerColor = MaterialTheme.colorScheme.surfaceContainer) {
+                tabs.forEach { tab ->
+                    NavigationRailItem(
+                        selected = tab == current,
+                        onClick = { select(tab) },
+                        modifier = Modifier.testTag("workspace_tab_${tab.key}"),
+                        icon = {
+                            if (tab == TopLevel.CHALLENGES && pendingInviteCount > 0) {
+                                BadgedBox(
+                                    badge = {
+                                        Badge(modifier = Modifier.testTag("challenges_nav_invite_badge")) {
+                                            Text(pendingInviteCount.toString())
+                                        }
+                                    }
+                                ) {
+                                    Icon(if (tab == current) tab.selectedIcon else tab.icon, contentDescription = null)
+                                }
+                            } else {
+                                Icon(if (tab == current) tab.selectedIcon else tab.icon, contentDescription = null)
+                            }
+                        },
+                        label = { Text(stringResource(tab.label)) }
+                    )
+                }
+            }
+        }
+        Scaffold(
+            modifier = Modifier.weight(1f),
+            containerColor = MaterialTheme.colorScheme.background,
+            topBar = {
+                // Keep the Home return and Settings buttons on the Focus screen (with no topbar title text)
+                if (current == TopLevel.FOCUS && !isPhoneLockActive) {
+                    androidx.compose.material3.TopAppBar(
+                        title = {},
+                        navigationIcon = {
+                            IconButton(
+                                onClick = { select(TopLevel.HOME) },
+                                modifier = Modifier.testTag("workspace_home_button")
+                            ) {
+                                Icon(Icons.Rounded.Home, contentDescription = stringResource(R.string.nav_home))
+                            }
+                        },
+                        colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
+                            containerColor = androidx.compose.ui.graphics.Color.Transparent,
+                            scrolledContainerColor = androidx.compose.ui.graphics.Color.Transparent
+                        ),
+                        actions = {
+                            IconButton(
+                                onClick = { navController.navigate(Routes.SETTINGS) },
+                                modifier = Modifier.testTag("workspace_settings_button")
+                            ) {
+                                Icon(Icons.Rounded.Settings, contentDescription = stringResource(R.string.nav_settings))
+                            }
+                        }
+                    )
+                }
+            },
+            bottomBar = {
+                if (!wide && current != TopLevel.HOME && !isImeVisible && !isPhoneLockActive) {
+                    NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainer) {
+                        workspaceTabs.forEach { tab ->
+                            NavigationBarItem(
+                                selected = tab == current,
+                                onClick = { select(tab) },
+                                modifier = Modifier.testTag("workspace_tab_${tab.key}"),
+                                icon = {
+                                    if (tab == TopLevel.CHALLENGES && pendingInviteCount > 0) {
+                                        BadgedBox(
+                                            badge = {
+                                                Badge(modifier = Modifier.testTag("challenges_nav_invite_badge")) {
+                                                    Text(pendingInviteCount.toString())
+                                                }
+                                            }
+                                        ) {
+                                            Icon(if (tab == current) tab.selectedIcon else tab.icon, contentDescription = null)
+                                        }
+                                    } else {
+                                        Icon(if (tab == current) tab.selectedIcon else tab.icon, contentDescription = null)
+                                    }
+                                },
+                                label = { Text(stringResource(tab.label)) }
+                            )
+                        }
+                    }
+                }
+            }
+        ) { padding ->
+            val hideChrome = current == TopLevel.HOME
+            val bottomPadding = if (hideChrome || isImeVisible || isPhoneLockActive) 0.dp else padding.calculateBottomPadding()
+            val topPadding = if (hideChrome || (isImeVisible && current == TopLevel.CHALLENGES) || isPhoneLockActive) 0.dp else padding.calculateTopPadding()
+            HorizontalPager(
+                state = pagerState,
+                userScrollEnabled = settings.swipeToNavigate && !isImeVisible && !isPhoneLockActive && !drawerOpen,
+                beyondViewportPageCount = 0,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(bottom = bottomPadding)
+            ) { page ->
+                when (tabs[page]) {
+                    TopLevel.HOME -> LauncherHomeScreen(
+                        launcherViewModel = launcherViewModel,
+                        timerViewModel = timerViewModel,
+                        radioViewModel = radioViewModel,
+                        isHomeTabActive = current == TopLevel.HOME,
+                        drawerOpen = drawerOpen,
+                        onDrawerOpenChange = { drawerOpen = it },
+                        onOpenAllowedApps = { navController.navigate(Routes.ALLOWED_APPS) },
+                        onOpenTimerTab = { select(TopLevel.FOCUS) },
+                        onOpenRadio = { navController.navigate(Routes.RADIO) },
+                        onOpenSettings = { navController.navigate(Routes.SETTINGS) }
+                    )
+                    TopLevel.FOCUS -> TimerScreen(
+                        viewModel = timerViewModel,
+                        settingsViewModel = settingsViewModel,
+                        topBarPadding = padding.calculateTopPadding(),
+                        onNavigateToBatterySaver = {
+                            if (navController.currentDestination?.route != Routes.FOCUS_MODE) {
+                                navController.navigate(Routes.FOCUS_MODE) { launchSingleTop = true }
+                            }
+                        },
+                        onNavigateToRadio = { navController.navigate(Routes.RADIO) },
+                        onNavigateToChallenges = { select(TopLevel.CHALLENGES) },
+                        onNavigateToStyles = { navController.navigate(Routes.STYLE) }
+                    )
+                    else -> {
+                        // Tablets, foldables and landscape: keep each tab a readable column instead of stretching it.
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .padding(top = topPadding),
+                            contentAlignment = Alignment.TopCenter
+                        ) {
+                            Box(Modifier.widthIn(max = Spacing.contentMaxWidth).fillMaxSize()) {
+                                when (tabs[page]) {
+                                    TopLevel.HOME, TopLevel.FOCUS -> Unit
+                                    TopLevel.STUDY -> RevisionsHomeScreen(
+                                        viewModel = revisionsViewModel,
+                                        onAddClick = { navController.navigate(Routes.CAPTURE) },
+                                        onImageCaptured = { navController.navigate(Routes.crop(it)) },
+                                        onPageScanned = { navController.navigate(Routes.crop(it, whole = true)) },
+                                        onDeckClick = { navController.navigate(Routes.deck(it)) },
+                                        onNoteClick = { navController.navigate(Routes.note(it)) },
+                                        onStartSessionClick = { navController.navigate(Routes.session(it)) }
+                                    )
+                                    TopLevel.CHALLENGES -> ChallengesScreen(
+                                        viewModel = challengeViewModel,
+                                        onOpenSettings = null
+                                    )
+                                    TopLevel.PROGRESS -> ProgressTab(
+                                        selected = progressTab,
+                                        onSelect = { progressTab = it },
+                                        analyticsViewModel = analyticsViewModel,
+                                        examsViewModel = examsViewModel
+                                    )
+                                    TopLevel.COMMUNITY -> CommunityTab(navController)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProgressTab(
+    selected: Int,
+    onSelect: (Int) -> Unit,
+    analyticsViewModel: AnalyticsViewModel,
+    examsViewModel: ExamsViewModel
+) {
+    val activeIdx = selected.coerceIn(0, 2)
+    val progressTabs = listOf(
+        Triple(0, R.string.progress_tab_stats, Icons.Rounded.Insights),
+        Triple(1, R.string.progress_tab_exams, Icons.Rounded.Event),
+        Triple(2, R.string.progress_tab_island, Icons.Rounded.Explore)
+    )
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.sm, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(3.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    progressTabs.forEach { (idx, labelRes, icon) ->
+                        val isSelected = activeIdx == idx
+                        Surface(
+                            onClick = { onSelect(idx) },
+                            shape = CircleShape,
+                            color = if (isSelected) {
+                                MaterialTheme.colorScheme.primaryContainer
+                            } else {
+                                androidx.compose.ui.graphics.Color.Transparent
+                            },
+                            contentColor = if (isSelected) {
+                                MaterialTheme.colorScheme.onPrimaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 36.dp)
+                                .testTag("progress_tab_$idx")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = Spacing.sm, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally)
+                            ) {
+                                Icon(
+                                    imageVector = icon,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = stringResource(labelRes),
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        when (activeIdx) {
+            0 -> AnalyticsScreen(viewModel = analyticsViewModel, onOpenIsland = { onSelect(2) })
+            1 -> ExamsScreen(viewModel = examsViewModel)
+            else -> com.example.ui.screen.island.IslandExplorerScreen(analyticsViewModel = analyticsViewModel)
+        }
+    }
+}
+
+@Composable
+private fun CommunityTab(navController: NavHostController) {
+    val account by FocusFlowApplication.instance.authRepository.state.collectAsStateWithLifecycle()
+    if (account !is AccountState.SignedIn) {
+        GuestCommunity(
+            onCreateAccount = { navController.navigate(Routes.auth(AuthMode.CREATE_ACCOUNT)) },
+            onSignIn = { navController.navigate(Routes.auth(AuthMode.SIGN_IN)) }
+        )
+        return
+    }
+    val owner = LocalViewModelStoreOwner.current
+    // Firebase can be unavailable (no network on first launch, misconfiguration): degrade gracefully.
+    val communityViewModel = remember(owner) {
+        runCatching { owner?.let { ViewModelProvider(it)[CommunityViewModel::class.java] } }.getOrNull()
+    }
+    if (communityViewModel != null) {
+        CommunityScreen(viewModel = communityViewModel)
+    } else {
+        EmptyState(
+            icon = Icons.Rounded.CloudOff,
+            title = stringResource(R.string.community_unavailable_title),
+            body = stringResource(R.string.community_unavailable_body)
+        )
+    }
+}
+
+/** Guests (no account) see what Community offers and how to join. Their local data comes along. */
+@Composable
+private fun GuestCommunity(onCreateAccount: () -> Unit, onSignIn: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        EmptyState(
+            icon = Icons.Rounded.EmojiEvents,
+            title = stringResource(R.string.community_guest_title),
+            body = stringResource(R.string.community_guest_body),
+            actionLabel = stringResource(R.string.community_guest_create),
+            onAction = onCreateAccount
+        )
+        TextButton(onClick = onSignIn, modifier = Modifier.padding(bottom = Spacing.lg)) {
+            Text(stringResource(R.string.community_guest_sign_in))
+        }
+    }
+}
+
+/** Secondary destination with a back arrow (predictive back is handled by Navigation). */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SecondaryScreen(
+    title: String,
+    onBack: () -> Unit,
+    content: @Composable (androidx.compose.foundation.layout.PaddingValues) -> Unit
+) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(title) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = stringResource(R.string.back))
+                    }
+                }
+            )
+        },
+        content = content
+    )
+}

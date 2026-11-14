@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 11 and lower. Cards, sessions, exams and settings are backed up; the encrypted key file
+     (unreadable on another device) and the running-timer state are not. -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="focusflow_secure.xml" />
+    <exclude domain="sharedpref" path="focusflow_timer_state.xml" />
+</full-backup-content>

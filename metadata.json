@@ -1,0 +1,6 @@
+{
+  "name": "Focus Island Launcher",
+  "description": "An aesthetic 2.5D island Android home launcher and gamified focus session tool with allowed apps, Pomodoro timer, real-time radio, and app blocker.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

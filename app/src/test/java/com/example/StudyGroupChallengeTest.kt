@@ -1,0 +1,1027 @@
+package com.example
+
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.test.core.app.ApplicationProvider
+import com.example.data.challenge.Challenge
+import com.example.data.challenge.ChallengeResult
+import com.example.data.challenge.ChallengeStore
+import com.example.data.challenge.FriendChallenge
+import com.example.data.challenge.FriendChallengeRepository
+import com.example.data.challenge.FriendChallengeRepository.Companion.challengeFromJson
+import com.example.data.challenge.FriendChallengeRepository.Companion.mergeChallenges
+import com.example.data.challenge.FriendChallengeRepository.Companion.toJson
+import com.example.data.challenge.FriendChallengeStatus
+import com.example.data.challenge.PersonalChallengeType
+import com.example.data.challenge.StudyFriendOption
+import com.example.data.challenge.StudyGroupMember
+import com.example.data.challenge.StudyGroupMessage
+import com.example.data.challenge.StudyGroupNudge
+import com.example.data.challenge.StudyMemberRoleStatus
+import com.example.data.challenge.StudyMemberTimerState
+import com.example.ui.screen.challenge.ChallengeDurationMode
+import com.example.ui.screen.challenge.ChallengeInitConfig
+import com.example.ui.screen.challenge.StrictPhoneLockOverlay
+import com.example.ui.screen.challenge.StudyGroupFriendsSheet
+import com.example.ui.theme.FocusIslandTheme
+import com.example.ui.theme.ThemeMode
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+
+@RunWith(RobolectricTestRunner::class)
+class StudyGroupChallengeTest {
+
+    @get:Rule
+    val composeRule = createComposeRule()
+
+    @Test
+    fun `multi-friend study group serializes and merges members, messages and nudges`() {
+        val membersA = listOf(
+            StudyGroupMember(
+                uid = "me",
+                name = "Youcef",
+                minutes = 25,
+                timerState = StudyMemberTimerState.FOCUSING,
+                roleStatus = StudyMemberRoleStatus.ACTIVE,
+                updatedAt = 1000L
+            ),
+            StudyGroupMember(
+                uid = "f1",
+                name = "Amine",
+                minutes = 10,
+                timerState = StudyMemberTimerState.PAUSED,
+                roleStatus = StudyMemberRoleStatus.ACTIVE,
+                updatedAt = 1000L
+            )
+        )
+        val membersB = listOf(
+            StudyGroupMember(
+                uid = "me",
+                name = "Youcef",
+                minutes = 30,
+                timerState = StudyMemberTimerState.FOCUSING,
+                roleStatus = StudyMemberRoleStatus.ACTIVE,
+                updatedAt = 2000L
+            ),
+            StudyGroupMember(
+                uid = "f1",
+                name = "Amine",
+                minutes = 15,
+                timerState = StudyMemberTimerState.PAUSED,
+                roleStatus = StudyMemberRoleStatus.ACTIVE,
+                updatedAt = 2000L
+            ),
+            StudyGroupMember(
+                uid = "f2",
+                name = "Lina",
+                minutes = 40,
+                timerState = StudyMemberTimerState.FOCUSING,
+                roleStatus = StudyMemberRoleStatus.ACTIVE,
+                updatedAt = 2000L
+            )
+        )
+
+        val msg1 = StudyGroupMessage("m1", "me", "Youcef", "🔥", 1100L)
+        val msg2 = StudyGroupMessage("m2", "f2", "Lina", "Let's finish this chapter!", 2100L)
+        val nudge1 = StudyGroupNudge("n1", "ch_1", "me", "Youcef", "f1", "Amine", 2200L)
+
+        val challengeA = FriendChallenge(
+            id = "2026-10-26_me_1000",
+            challengerUid = "me",
+            challengerName = "Youcef",
+            challengerMinutes = 25,
+            opponentUid = "f1",
+            opponentName = "Amine",
+            opponentMinutes = 10,
+            dayKey = "2026-10-26",
+            createdAt = 1000L,
+            acceptedAt = 1000L,
+            endAt = 99999L,
+            status = FriendChallengeStatus.ACTIVE,
+            members = membersA,
+            messages = listOf(msg1),
+            nudges = emptyList()
+        )
+
+        val challengeB = challengeA.copy(
+            challengerMinutes = 30,
+            opponentMinutes = 15,
+            members = membersB,
+            messages = listOf(msg1, msg2),
+            nudges = listOf(nudge1)
+        )
+
+        val merged = mergeChallenges(challengeA, challengeB)
+        assertEquals(3, merged.allMembers().size)
+        assertEquals(30, merged.myMinutes("me"))
+        assertEquals(40, merged.friendMinutes("me"))
+        assertEquals(2, merged.messages.size)
+        assertEquals(1, merged.nudges.size)
+        assertTrue(merged.allMembers().first { it.uid == "f1" }.isPausedOrIdle)
+        assertFalse(merged.allMembers().first { it.uid == "f2" }.isPausedOrIdle)
+
+        // Verify JSON round-trip preserves members, messages, and nudges
+        val roundTrip = challengeFromJson(merged.toJson())
+        assertEquals(3, roundTrip.allMembers().size)
+        assertEquals(2, roundTrip.messages.size)
+        assertEquals("Let's finish this chapter!", roundTrip.messages.last().text)
+        assertEquals(1, roundTrip.nudges.size)
+        assertEquals("f1", roundTrip.nudges.first().toUid)
+    }
+
+    @Test
+    fun `re-launching a challenge after surrendering creates distinct active challenge`() {
+        val surrendered = FriendChallenge(
+            id = "2026-10-26_me_1000",
+            challengerUid = "me",
+            challengerName = "Youcef",
+            challengerMinutes = 12,
+            opponentUid = "f1",
+            opponentName = "Amine",
+            opponentMinutes = 20,
+            dayKey = "2026-10-26",
+            createdAt = 1000L,
+            acceptedAt = 1000L,
+            endAt = 99999L,
+            finishedAt = 1500L,
+            status = FriendChallengeStatus.SURRENDERED,
+            surrenderedByUid = "me",
+            winnerUid = "f1"
+        )
+
+        val relaunched = FriendChallenge(
+            id = "2026-10-26_me_2000",
+            challengerUid = "me",
+            challengerName = "Youcef",
+            challengerMinutes = 12,
+            opponentUid = "f1",
+            opponentName = "Amine",
+            opponentMinutes = 20,
+            dayKey = "2026-10-26",
+            createdAt = 2000L,
+            acceptedAt = 2000L,
+            endAt = 99999L,
+            status = FriendChallengeStatus.ACTIVE
+        )
+
+        assertTrue(surrendered.didISurrender("me"))
+        assertFalse(relaunched.didISurrender("me"))
+        assertTrue(relaunched.hasActiveParticipant("me"))
+        assertTrue(relaunched.hasActiveParticipant("f1"))
+        assertFalse(surrendered.id == relaunched.id)
+    }
+
+    @Test
+    fun `messages are automatically deleted when challenge ends or when cleared by creator`() {
+        val msgOld = StudyGroupMessage("m1", "me", "Youcef", "Hello group!", 1000L)
+        val msgBeforeClear = StudyGroupMessage("m2", "f1", "Amine", "Focusing now", 1500L)
+        val msgAfterClear = StudyGroupMessage("m3", "f1", "Amine", "New message after clear", 2500L)
+
+        val activeWithOldMessages = FriendChallenge(
+            id = "2026-10-26_me_1000",
+            challengerUid = "me",
+            challengerName = "Youcef",
+            challengerMinutes = 25,
+            opponentUid = "f1",
+            opponentName = "Amine",
+            opponentMinutes = 20,
+            dayKey = "2026-10-26",
+            createdAt = 900L,
+            acceptedAt = 900L,
+            endAt = 99999L,
+            status = FriendChallengeStatus.ACTIVE,
+            messages = listOf(msgOld, msgBeforeClear),
+            messagesClearedAt = 0L
+        )
+
+        val clearedByCreator = activeWithOldMessages.copy(
+            messages = listOf(msgAfterClear),
+            messagesClearedAt = 2000L
+        )
+
+        // Merging a stale peer snapshot with creator-cleared snapshot must strip messages <= 2000L
+        val mergedAfterClear = mergeChallenges(activeWithOldMessages, clearedByCreator)
+        assertEquals(2000L, mergedAfterClear.messagesClearedAt)
+        assertEquals(1, mergedAfterClear.messages.size)
+        assertEquals("m3", mergedAfterClear.messages.first().id)
+
+        // When challenge ends (COMPLETED or SURRENDERED), all messages are wiped and never resurrected on merge
+        val endedChallenge = clearedByCreator.copy(
+            status = FriendChallengeStatus.COMPLETED,
+            finishedAt = 99999L,
+            messages = emptyList(),
+            nudges = emptyList(),
+            messagesClearedAt = 99999L
+        )
+        val mergedWithEnded = mergeChallenges(activeWithOldMessages, endedChallenge)
+        assertEquals(FriendChallengeStatus.COMPLETED, mergedWithEnded.status)
+        assertTrue(mergedWithEnded.messages.isEmpty())
+        assertTrue(mergedWithEnded.nudges.isEmpty())
+
+        // When creator deletes the Study Group (CANCELLED), it overrides any cached ACTIVE copy on friends' phones
+        val cancelledByCreator = activeWithOldMessages.copy(
+            status = FriendChallengeStatus.CANCELLED,
+            finishedAt = 3000L,
+            messages = emptyList(),
+            nudges = emptyList(),
+            messagesClearedAt = 3000L
+        )
+        val mergedWithCancelled = mergeChallenges(activeWithOldMessages, cancelledByCreator)
+        assertEquals(FriendChallengeStatus.CANCELLED, mergedWithCancelled.status)
+        assertTrue(mergedWithCancelled.messages.isEmpty())
+        assertTrue(mergedWithCancelled.nudges.isEmpty())
+    }
+
+    @Test
+    fun `invited member is only added to accepted leaderboard after accepting and stays offered for 30 min when declined`() {
+        val t0 = 1_000_000L
+        val creator = StudyGroupMember(
+            uid = "creator",
+            name = "Youcef",
+            minutes = 45,
+            timerState = StudyMemberTimerState.FOCUSING,
+            roleStatus = StudyMemberRoleStatus.ACTIVE,
+            invitedAt = t0,
+            updatedAt = t0
+        )
+        val invitedFriend = StudyGroupMember(
+            uid = "friend1",
+            name = "Salmi",
+            minutes = 0,
+            timerState = StudyMemberTimerState.IDLE,
+            roleStatus = StudyMemberRoleStatus.INVITED,
+            invitedAt = t0,
+            updatedAt = t0
+        )
+
+        val group = FriendChallenge(
+            id = "2026-10-26_creator_$t0",
+            challengerUid = "creator",
+            challengerName = "Youcef",
+            challengerMinutes = 45,
+            opponentUid = "friend1",
+            opponentName = "Salmi",
+            opponentMinutes = 0,
+            dayKey = "2026-10-26",
+            createdAt = t0,
+            acceptedAt = t0,
+            endAt = t0 + 86_400_000L,
+            status = FriendChallengeStatus.ACTIVE,
+            members = listOf(creator, invitedFriend)
+        )
+
+        // 1. Before accepting: only creator is in acceptedMembers(); friend1 is in pendingOrExpiredInviteMembers()
+        assertEquals(1, group.acceptedMembers().size)
+        assertEquals("creator", group.acceptedMembers().first().uid)
+        assertFalse(group.hasActiveParticipant("friend1"))
+        assertTrue(group.hasValidInvite("friend1", t0 + 5 * 60_000L))
+        assertTrue(group.isFreshInviteFor("friend1", t0 + 5 * 60_000L))
+        assertFalse(group.isDeclinedOfferFor("friend1", t0 + 5 * 60_000L))
+
+        // 2. Friend declines at +5 min: status becomes DECLINED, still offered for remaining 25 minutes
+        val declinedMember = invitedFriend.copy(
+            roleStatus = StudyMemberRoleStatus.DECLINED,
+            updatedAt = t0 + 5 * 60_000L
+        )
+        val groupAfterDecline = group.copy(members = listOf(creator, declinedMember))
+        assertTrue(groupAfterDecline.hasValidInvite("friend1", t0 + 10 * 60_000L))
+        assertTrue(groupAfterDecline.isDeclinedOfferFor("friend1", t0 + 10 * 60_000L))
+        assertEquals(20 * 60_000L, groupAfterDecline.inviteRemainingMsFor("friend1", t0 + 10 * 60_000L))
+
+        // 3. At +30 minutes + 1ms: invitation expires and is no longer valid
+        val expiredTime = t0 + FriendChallengeRepository.INVITE_EXPIRY_MS + 1L
+        assertFalse(groupAfterDecline.hasValidInvite("friend1", expiredTime))
+        assertFalse(groupAfterDecline.isDeclinedOfferFor("friend1", expiredTime))
+        assertEquals(0L, groupAfterDecline.inviteRemainingMsFor("friend1", expiredTime))
+
+        // 4. Creator re-sends invitation at expiredTime + 10_000L: friend gets a fresh 30m window
+        val resentTime = expiredTime + 10_000L
+        val resentMember = declinedMember.copy(
+            roleStatus = StudyMemberRoleStatus.INVITED,
+            invitedAt = resentTime,
+            updatedAt = resentTime
+        )
+        val groupAfterResend = mergeChallenges(groupAfterDecline, groupAfterDecline.copy(members = listOf(creator, resentMember)))
+        assertTrue(groupAfterResend.hasValidInvite("friend1", resentTime + 1_000L))
+        assertTrue(groupAfterResend.isFreshInviteFor("friend1", resentTime + 1_000L))
+        assertFalse(groupAfterResend.isDeclinedOfferFor("friend1", resentTime + 1_000L))
+
+        // 5. Friend accepts within the new 30m window: joins acceptedMembers()
+        val acceptedMember = resentMember.copy(
+            roleStatus = StudyMemberRoleStatus.ACTIVE,
+            updatedAt = resentTime + 30_000L
+        )
+        val groupAfterAccept = mergeChallenges(groupAfterResend, groupAfterResend.copy(members = listOf(creator, acceptedMember)))
+        assertEquals(2, groupAfterAccept.acceptedMembers().size)
+        assertTrue(groupAfterAccept.hasActiveParticipant("friend1"))
+        assertTrue(groupAfterAccept.pendingOrExpiredInviteMembers().isEmpty())
+    }
+
+    @Test
+    fun `target hours challenge detects immediate winner when target reached and serializes targetMinutes`() {
+        val t0 = 5_000_000L
+        val creator = StudyGroupMember(
+            uid = "creator",
+            name = "Youcef",
+            minutes = 60,
+            timerState = StudyMemberTimerState.FOCUSING,
+            roleStatus = StudyMemberRoleStatus.ACTIVE,
+            invitedAt = t0,
+            updatedAt = t0 + 1_000L
+        )
+        val friend = StudyGroupMember(
+            uid = "friend1",
+            name = "Amine",
+            minutes = 90,
+            timerState = StudyMemberTimerState.FOCUSING,
+            roleStatus = StudyMemberRoleStatus.ACTIVE,
+            invitedAt = t0,
+            updatedAt = t0 + 2_000L
+        )
+
+        val openChallenge = FriendChallenge(
+            id = "2026-10-28_creator_$t0",
+            challengerUid = "creator",
+            challengerName = "Youcef",
+            challengerMinutes = 60,
+            opponentUid = "friend1",
+            opponentName = "Amine",
+            opponentMinutes = 90,
+            dayKey = "2026-10-28",
+            createdAt = t0,
+            acceptedAt = t0,
+            endAt = t0 + 86_400_000L,
+            targetMinutes = 0,
+            status = FriendChallengeStatus.ACTIVE,
+            members = listOf(creator, friend)
+        )
+        assertFalse(openChallenge.isTargetHoursChallenge)
+        assertEquals(null, openChallenge.findTargetReachedWinnerUid())
+
+        val targetChallenge = openChallenge.copy(targetMinutes = 180) // 3 hours race
+        assertTrue(targetChallenge.isTargetHoursChallenge)
+        assertEquals(null, targetChallenge.findTargetReachedWinnerUid())
+
+        // Friend reaches 180 minutes first at t0 + 5_000L
+        val friendReached = friend.copy(minutes = 180, updatedAt = t0 + 5_000L)
+        val creatorReachedLater = creator.copy(minutes = 185, updatedAt = t0 + 9_000L)
+        val updatedChallenge = targetChallenge.copy(
+            challengerMinutes = 185,
+            opponentMinutes = 180,
+            members = listOf(creatorReachedLater, friendReached)
+        )
+
+        // Earliest participant to reach >= 180 minutes wins
+        assertEquals("friend1", updatedChallenge.findTargetReachedWinnerUid())
+
+        // Verify JSON round-trip and merge preserve targetMinutes
+        val roundTrip = challengeFromJson(updatedChallenge.toJson())
+        assertEquals(180, roundTrip.targetMinutes)
+        assertTrue(roundTrip.isTargetHoursChallenge)
+        assertEquals("friend1", roundTrip.findTargetReachedWinnerUid())
+
+        val merged = mergeChallenges(openChallenge, updatedChallenge)
+        assertEquals(180, merged.targetMinutes)
+    }
+
+    @Test
+    fun `creator adding extra focus time extends targetMinutes and propagates through mergeChallenges`() {
+        val t0 = 7_000_000L
+        val creator = StudyGroupMember(
+            uid = "creator",
+            name = "Youcef",
+            minutes = 110,
+            timerState = StudyMemberTimerState.FOCUSING,
+            roleStatus = StudyMemberRoleStatus.ACTIVE,
+            invitedAt = t0,
+            updatedAt = t0 + 1_000L
+        )
+        val friend = StudyGroupMember(
+            uid = "friend1",
+            name = "Salmi",
+            minutes = 95,
+            timerState = StudyMemberTimerState.FOCUSING,
+            roleStatus = StudyMemberRoleStatus.ACTIVE,
+            invitedAt = t0,
+            updatedAt = t0 + 2_000L
+        )
+
+        // Initial 2-hour (120m) challenge created by Youcef
+        val initialChallenge = FriendChallenge(
+            id = "2026-10-29_creator_$t0",
+            challengerUid = "creator",
+            challengerName = "Youcef",
+            challengerMinutes = 110,
+            opponentUid = "friend1",
+            opponentName = "Salmi",
+            opponentMinutes = 95,
+            dayKey = "2026-10-29",
+            createdAt = t0,
+            acceptedAt = t0,
+            endAt = t0 + 86_400_000L,
+            targetMinutes = 120,
+            status = FriendChallengeStatus.ACTIVE,
+            members = listOf(creator, friend)
+        )
+        assertTrue(initialChallenge.isChallenger("creator"))
+        assertFalse(initialChallenge.isChallenger("friend1"))
+        assertEquals(null, initialChallenge.findTargetReachedWinnerUid())
+
+        // Creator adds +60m (1 hour) -> new target is 180m (3 hours) with announcement message
+        val addTimeMsg = StudyGroupMessage(
+            id = "creator_${t0 + 3_000L}",
+            senderUid = "creator",
+            senderName = "Youcef",
+            text = "⏱️ Added +1h to the challenge goal (New target: 3h)",
+            createdAt = t0 + 3_000L
+        )
+        val extendedChallenge = initialChallenge.copy(
+            targetMinutes = initialChallenge.targetMinutes + 60,
+            messages = initialChallenge.messages + addTimeMsg
+        )
+        assertEquals(180, extendedChallenge.targetMinutes)
+
+        // Merging with an older snapshot from friend1 keeps the higher 180m target and announcement message
+        val merged = mergeChallenges(initialChallenge, extendedChallenge)
+        assertEquals(180, merged.targetMinutes)
+        assertEquals(1, merged.messages.size)
+
+        // Even when creator reaches 125m (which would have won the old 120m goal), challenge continues until 180m
+        val after125m = merged.copy(
+            challengerMinutes = 125,
+            members = listOf(creator.copy(minutes = 125, updatedAt = t0 + 4_000L), friend)
+        )
+        assertEquals(null, after125m.findTargetReachedWinnerUid())
+
+        // Once creator reaches 180m, creator wins
+        val after180m = after125m.copy(
+            challengerMinutes = 180,
+            members = listOf(creator.copy(minutes = 180, updatedAt = t0 + 8_000L), friend)
+        )
+        assertEquals("creator", after180m.findTargetReachedWinnerUid())
+    }
+
+    @Test
+    fun `participants start at zero minutes and only post-creation focus minutes count`() {
+        val t0 = 9_000_000L
+        // Creator already had 90m today before starting the challenge; friend had 50m today
+        val creator = StudyGroupMember(
+            uid = "creator",
+            name = "Youcef",
+            minutes = 0,
+            baselineMinutes = 90,
+            timerState = StudyMemberTimerState.FOCUSING,
+            roleStatus = StudyMemberRoleStatus.ACTIVE,
+            invitedAt = t0,
+            updatedAt = t0
+        )
+        val friend = StudyGroupMember(
+            uid = "friend1",
+            name = "Amine",
+            minutes = 0,
+            baselineMinutes = 50,
+            timerState = StudyMemberTimerState.IDLE,
+            roleStatus = StudyMemberRoleStatus.INVITED,
+            invitedAt = t0,
+            updatedAt = t0
+        )
+
+        val challenge = FriendChallenge(
+            id = "2026-10-30_creator_$t0",
+            challengerUid = "creator",
+            challengerName = "Youcef",
+            challengerMinutes = 0,
+            opponentUid = "friend1",
+            opponentName = "Amine",
+            opponentMinutes = 0,
+            dayKey = "2026-10-30",
+            createdAt = t0,
+            acceptedAt = t0,
+            endAt = t0 + 86_400_000L,
+            status = FriendChallengeStatus.ACTIVE,
+            members = listOf(creator, friend)
+        )
+
+        // At challenge start, both have 0 challenge minutes even though daily totals are 90m and 50m
+        assertEquals(0, creator.challengeMinutesFromToday(90))
+        assertEquals(0, friend.challengeMinutesFromToday(50))
+        assertEquals(0, challenge.myMinutes("creator"))
+        assertEquals(0, challenge.friendMinutes("creator"))
+
+        // After focusing 25m in the challenge (daily total = 115m for creator, 80m for friend = 30m in challenge)
+        assertEquals(25, creator.challengeMinutesFromToday(115))
+        assertEquals(30, friend.challengeMinutesFromToday(80))
+
+        // JSON serialization and mergeChallenges preserve baselineMinutes
+        val roundTrip = challengeFromJson(challenge.toJson())
+        assertEquals(90, roundTrip.allMembers().first { it.uid == "creator" }.baselineMinutes)
+        assertEquals(50, roundTrip.allMembers().first { it.uid == "friend1" }.baselineMinutes)
+
+        val progressed = challenge.copy(
+            challengerMinutes = 25,
+            opponentMinutes = 30,
+            members = listOf(
+                creator.copy(minutes = 25, updatedAt = t0 + 25 * 60_000L),
+                friend.copy(minutes = 30, roleStatus = StudyMemberRoleStatus.ACTIVE, updatedAt = t0 + 30 * 60_000L)
+            )
+        )
+        val merged = mergeChallenges(challenge, progressed)
+        assertEquals(25, merged.myMinutes("creator"))
+        assertEquals(30, merged.friendMinutes("creator"))
+        assertEquals(90, merged.allMembers().first { it.uid == "creator" }.baselineMinutes)
+        assertEquals(50, merged.allMembers().first { it.uid == "friend1" }.baselineMinutes)
+    }
+
+    @Test
+    fun `until defined hour challenge and keep day progress mode serialize and merge accurately`() {
+        val t0 = 10_000_000L
+        val endAt2100 = t0 + 3 * 3_600_000L
+        val creator = StudyGroupMember(
+            uid = "creator",
+            name = "Youcef",
+            minutes = 75, // Kept 75m day progress because startFromZero = false (baselineMinutes = 0)
+            baselineMinutes = 0,
+            timerState = StudyMemberTimerState.FOCUSING,
+            roleStatus = StudyMemberRoleStatus.ACTIVE,
+            invitedAt = t0,
+            updatedAt = t0
+        )
+        val friend = StudyGroupMember(
+            uid = "friend1",
+            name = "Salmi",
+            minutes = 60, // Kept 60m day progress
+            baselineMinutes = 0,
+            timerState = StudyMemberTimerState.FOCUSING,
+            roleStatus = StudyMemberRoleStatus.ACTIVE,
+            invitedAt = t0,
+            updatedAt = t0
+        )
+
+        val untilHourChallenge = FriendChallenge(
+            id = "2026-10-31_creator_$t0",
+            challengerUid = "creator",
+            challengerName = "Youcef",
+            challengerMinutes = 75,
+            opponentUid = "friend1",
+            opponentName = "Salmi",
+            opponentMinutes = 60,
+            dayKey = "2026-10-31",
+            createdAt = t0,
+            acceptedAt = t0,
+            endAt = endAt2100,
+            targetMinutes = 0,
+            startFromZero = false,
+            customEndHourLabel = "21:00",
+            status = FriendChallengeStatus.ACTIVE,
+            members = listOf(creator, friend)
+        )
+
+        assertTrue(untilHourChallenge.isUntilDefinedHourChallenge)
+        assertFalse(untilHourChallenge.isTargetHoursChallenge)
+        assertFalse(untilHourChallenge.startFromZero)
+        assertEquals("21:00", untilHourChallenge.customEndHourLabel)
+        assertEquals(75, creator.challengeMinutesFromToday(75))
+        assertEquals(105, creator.challengeMinutesFromToday(105))
+
+        val roundTrip = challengeFromJson(untilHourChallenge.toJson())
+        assertTrue(roundTrip.isUntilDefinedHourChallenge)
+        assertFalse(roundTrip.startFromZero)
+        assertEquals("21:00", roundTrip.customEndHourLabel)
+        assertEquals(endAt2100, roundTrip.endAt)
+
+        val updated = untilHourChallenge.copy(
+            challengerMinutes = 105,
+            opponentMinutes = 120,
+            members = listOf(
+                creator.copy(minutes = 105, updatedAt = t0 + 1800_000L),
+                friend.copy(minutes = 120, updatedAt = t0 + 1800_000L)
+            )
+        )
+        val merged = mergeChallenges(untilHourChallenge, updated)
+        assertTrue(merged.isUntilDefinedHourChallenge)
+        assertFalse(merged.startFromZero)
+        assertEquals("21:00", merged.customEndHourLabel)
+        assertEquals(105, merged.myMinutes("creator"))
+        assertEquals(120, merged.friendMinutes("creator"))
+    }
+
+    @Test
+    fun `tapping Until Hour button in StudyGroupFriendsSheet switches mode and submits custom end hour`() {
+        var submittedConfig: ChallengeInitConfig? = null
+        var submittedFriends: List<StudyFriendOption> = emptyList()
+
+        composeRule.setContent {
+            FocusIslandTheme(themeMode = ThemeMode.DARK) {
+                StudyGroupFriendsSheet(
+                    friends = listOf(
+                        StudyFriendOption(
+                            uid = "friend1",
+                            username = "Salmi",
+                            todayMinutes = 40,
+                            timerState = StudyMemberTimerState.FOCUSING
+                        )
+                    ),
+                    onConfirmConfig = { chosen, config ->
+                        submittedFriends = chosen
+                        submittedConfig = config
+                    },
+                    onDismiss = {}
+                )
+            }
+        }
+
+        // Tap "Until Hour" segmented button
+        composeRule.onNodeWithTag("invite_mode_until_hour_button").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("invite_mode_until_hour_button").assertIsSelected()
+
+        // Verify quick hour chips and picker button appear, and tap "22:00"
+        composeRule.onNodeWithTag("quick_until_hour_chip_22_0").assertIsDisplayed().performClick()
+        composeRule.waitForIdle()
+
+        // Also toggle "Keep day progress"
+        composeRule.onNodeWithTag("progress_mode_keep_day_button").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("progress_mode_keep_day_button").assertIsSelected()
+
+        // Select friend Salmi and confirm challenge launch
+        composeRule.onNodeWithText("Salmi").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("confirm_study_group_friends_button").performScrollTo().performClick()
+        composeRule.waitForIdle()
+
+        assertEquals(1, submittedFriends.size)
+        assertNotNull(submittedConfig)
+        assertEquals(ChallengeDurationMode.UNTIL_HOUR, submittedConfig!!.durationMode)
+        assertEquals(0, submittedConfig!!.targetMinutes)
+        assertEquals("22:00", submittedConfig!!.customEndHourLabel)
+        assertTrue(submittedConfig!!.customEndAtMs > 0L)
+        assertFalse(submittedConfig!!.startFromZero)
+    }
+
+    @Test
+    fun `lock phone challenge persists quote while active and does not save a history record when timer ends`() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        var currentNow = 1_700_000_000_000L
+        val store = ChallengeStore(context, clock = { currentNow })
+        val endAt = currentNow + 3_600_000L
+
+        val created = store.start(
+            goal = "Lock Phone",
+            endAt = endAt,
+            type = PersonalChallengeType.LOCK_PHONE
+        )
+
+        assertTrue(created.isLockPhone)
+        assertEquals(PersonalChallengeType.LOCK_PHONE, created.type)
+        assertTrue(created.quoteText.isNotBlank())
+        assertTrue(created.quoteAuthor.isNotBlank())
+
+        // Reload from store to verify JSON persistence of quote while active
+        val reloaded = ChallengeStore(context, clock = { currentNow }).state.value.active
+        assertNotNull(reloaded)
+        assertTrue(reloaded!!.isLockPhone)
+        assertEquals(created.quoteText, reloaded.quoteText)
+        assertEquals(created.quoteAuthor, reloaded.quoteAuthor)
+
+        // When time reaches endAt, Lock Phone unlocks the phone (active = null) and does NOT save a history record
+        currentNow = endAt + 1_000L
+        val expired = store.expireIfDue()
+        assertNotNull(expired)
+        assertEquals(ChallengeResult.DONE, expired!!.result)
+        assertNull(store.state.value.active)
+        assertTrue(store.state.value.history.none { it.id == created.id })
+
+        store.clearHistory()
+        context.getSharedPreferences("challenges", android.content.Context.MODE_PRIVATE).edit().clear().commit()
+    }
+
+    @Test
+    fun `StrictPhoneLockOverlay displays only countdown counter and motivational quote and calls onTimeUp when finished`() {
+        val now = 1_700_000_000_000L
+        val challenge = Challenge(
+            id = 101L,
+            goal = "Lock Phone",
+            startAt = now,
+            endAt = now + 45 * 60_000L,
+            type = PersonalChallengeType.LOCK_PHONE,
+            quoteText = "Discipline is choosing between what you want now and what you want most.",
+            quoteAuthor = "Abraham Lincoln"
+        )
+        val currentNow = androidx.compose.runtime.mutableLongStateOf(now + 15 * 60_000L)
+        var timeUpCalled = false
+
+        composeRule.setContent {
+            FocusIslandTheme(themeMode = ThemeMode.DARK) {
+                StrictPhoneLockOverlay(
+                    challenge = challenge,
+                    nowMs = currentNow.longValue,
+                    onTimeUp = { timeUpCalled = true }
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("strict_phone_lock_overlay").assertIsDisplayed()
+        composeRule.onNodeWithTag("phone_lock_countdown_clock").assertIsDisplayed()
+        composeRule.onNodeWithTag("phone_lock_quote_card").assertIsDisplayed()
+        composeRule.onNodeWithTag("phone_lock_quote_text").assertIsDisplayed()
+        composeRule.onNodeWithText(
+            "“Discipline is choosing between what you want now and what you want most.”"
+        ).assertIsDisplayed()
+        composeRule.onNodeWithText("— Abraham Lincoln").assertIsDisplayed()
+        assertFalse(timeUpCalled)
+
+        // Advance time to endAt and verify onTimeUp is invoked
+        currentNow.longValue = challenge.endAt
+        composeRule.waitForIdle()
+        assertTrue(timeUpCalled)
+    }
+
+    @Test
+    fun `healed baselineMinutes and toggling startFromZero count full 2h30m (150 min) study progress`() {
+        val t0 = 12_000_000L
+        // Stale snapshot where creator had an inflated baselineMinutes = 100 and stayed at 50m (150 - 100 = 50)
+        val staleCreator = StudyGroupMember(
+            uid = "creator",
+            name = "Youcef",
+            minutes = 50,
+            baselineMinutes = 100,
+            timerState = StudyMemberTimerState.FOCUSING,
+            roleStatus = StudyMemberRoleStatus.ACTIVE,
+            invitedAt = t0,
+            updatedAt = t0 + 1_000L
+        )
+        val friend = StudyGroupMember(
+            uid = "friend1",
+            name = "Khalil",
+            minutes = 219,
+            baselineMinutes = 0,
+            timerState = StudyMemberTimerState.ON_BREAK,
+            roleStatus = StudyMemberRoleStatus.ACTIVE,
+            invitedAt = t0,
+            updatedAt = t0 + 1_000L
+        )
+        val staleChallenge = FriendChallenge(
+            id = "2026-11-03_creator_$t0",
+            challengerUid = "creator",
+            challengerName = "Youcef",
+            challengerMinutes = 50,
+            opponentUid = "friend1",
+            opponentName = "Khalil",
+            opponentMinutes = 219,
+            dayKey = "2026-11-03",
+            createdAt = t0,
+            acceptedAt = t0,
+            endAt = t0 + 86_400_000L,
+            targetMinutes = 420,
+            startFromZero = true,
+            status = FriendChallengeStatus.ACTIVE,
+            members = listOf(staleCreator, friend)
+        )
+
+        // Newer snapshot where local session check healed baselineMinutes to 0 and updated minutes to 150 (2h30m)
+        val healedCreator = staleCreator.copy(
+            minutes = 150,
+            baselineMinutes = 0,
+            updatedAt = t0 + 5_000L
+        )
+        val healedChallenge = staleChallenge.copy(
+            challengerMinutes = 150,
+            members = listOf(healedCreator, friend)
+        )
+
+        val mergedHealed = mergeChallenges(staleChallenge, healedChallenge)
+        assertEquals(150, mergedHealed.myMinutes("creator"))
+        assertEquals(0, mergedHealed.allMembers().first { it.uid == "creator" }.baselineMinutes)
+
+        // Toggling startFromZero = false (Keep day progress / Total jour) overrides startFromZero = true and zeroes baselines
+        val switchedToDayProgress = staleChallenge.copy(
+            startFromZero = false,
+            challengerMinutes = 150,
+            members = listOf(
+                staleCreator.copy(minutes = 150, baselineMinutes = 0, updatedAt = t0 + 10_000L),
+                friend.copy(updatedAt = t0 + 10_000L)
+            )
+        )
+        val mergedModeSwitch = mergeChallenges(staleChallenge, switchedToDayProgress)
+        assertFalse(mergedModeSwitch.startFromZero)
+        assertEquals(150, mergedModeSwitch.myMinutes("creator"))
+        assertEquals(0, mergedModeSwitch.allMembers().first { it.uid == "creator" }.baselineMinutes)
+    }
+
+    @Test
+    fun `lock phone challenge remembers permitted apps across sessions and whitelists dialer packages`() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        context.getSharedPreferences("challenges", android.content.Context.MODE_PRIVATE).edit().clear().commit()
+
+        var currentNow = 1_750_000_000_000L
+        val store = ChallengeStore(context, clock = { currentNow })
+        val chosenApps = setOf(
+            com.example.service.PhoneLockOverlayManager.SYNTHETIC_PHONE_DIALER_PKG,
+            "com.google.android.calculator"
+        )
+
+        val firstLock = store.start(
+            goal = "Lock Phone",
+            endAt = currentNow + 1_800_000L,
+            type = PersonalChallengeType.LOCK_PHONE,
+            allowedPackages = chosenApps
+        )
+        assertEquals(chosenApps, firstLock.allowedPackages)
+        assertEquals(chosenApps, store.getDefaultAllowedPackages())
+
+        // Verify Phone/Dialer whitelisting allows system dialer and incall packages while blocking unrelated apps
+        assertTrue(
+            com.example.service.PhoneLockOverlayManager.isPackagePermittedForActiveLock(
+                context,
+                "com.google.android.dialer",
+                firstLock
+            )
+        )
+        assertTrue(
+            com.example.service.PhoneLockOverlayManager.isPackagePermittedForActiveLock(
+                context,
+                "com.android.incallui",
+                firstLock
+            )
+        )
+        assertTrue(
+            com.example.service.PhoneLockOverlayManager.isPackagePermittedForActiveLock(
+                context,
+                "com.google.android.calculator",
+                firstLock
+            )
+        )
+        assertFalse(
+            com.example.service.PhoneLockOverlayManager.isPackagePermittedForActiveLock(
+                context,
+                "com.instagram.android",
+                firstLock
+            )
+        )
+
+        // Complete first lock session and start a new one without passing allowedPackages:
+        // it should automatically remember the user's default permitted apps
+        currentNow += 1_900_000L
+        store.expireIfDue()
+
+        val reloadedStore = ChallengeStore(context, clock = { currentNow })
+        assertEquals(chosenApps, reloadedStore.getDefaultAllowedPackages())
+
+        val secondLock = reloadedStore.start(
+            goal = "Lock Phone 2",
+            endAt = currentNow + 1_800_000L,
+            type = PersonalChallengeType.LOCK_PHONE
+        )
+        assertEquals(chosenApps, secondLock.allowedPackages)
+
+        reloadedStore.clearHistory()
+        context.getSharedPreferences("challenges", android.content.Context.MODE_PRIVATE).edit().clear().commit()
+    }
+
+    @Test
+    fun `rapid multi-clicking Phone app in StrictPhoneLockOverlay is debounced by single-flight cooldown and never crashes`() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        com.example.service.PhoneLockOverlayManager.resetLaunchGuardState()
+
+        val phonePkg = com.example.service.PhoneLockOverlayManager.SYNTHETIC_PHONE_DIALER_PKG
+        val baseTick = 50_000L
+
+        // 1. Direct burst test: 10 rapid taps within 500ms -> only the 1st tap is accepted
+        val firstAccepted = com.example.service.PhoneLockOverlayManager.launchPermittedAppSafely(
+            context = context,
+            packageName = phonePkg,
+            nowOverrideMs = baseTick
+        )
+        assertTrue(firstAccepted)
+
+        for (i in 1..10) {
+            val acceptedDuringCooldown = com.example.service.PhoneLockOverlayManager.launchPermittedAppSafely(
+                context = context,
+                packageName = phonePkg,
+                nowOverrideMs = baseTick + i * 50L
+            )
+            assertFalse("Tap #$i within cooldown must be ignored", acceptedDuringCooldown)
+        }
+
+        // 2. UI test: render StrictPhoneLockOverlay with permitted Phone & Calculator apps and rapidly click Phone 10 times
+        com.example.service.PhoneLockOverlayManager.resetLaunchGuardState()
+        val now = 1_750_000_000_000L
+        val challenge = Challenge(
+            id = 202L,
+            goal = "Lock Phone",
+            startAt = now,
+            endAt = now + 30 * 60_000L,
+            type = PersonalChallengeType.LOCK_PHONE,
+            quoteText = "Focus is a matter of deciding what things you're not going to do.",
+            quoteAuthor = "John Carmack",
+            allowedPackages = setOf(phonePkg, "com.android.calculator2")
+        )
+
+        composeRule.setContent {
+            FocusIslandTheme(themeMode = ThemeMode.DARK) {
+                StrictPhoneLockOverlay(
+                    challenge = challenge,
+                    nowMs = now + 5 * 60_000L,
+                    onTimeUp = {}
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("phone_lock_permitted_apps_row").performScrollTo().assertIsDisplayed()
+        val phoneNode = composeRule.onNodeWithTag("permitted_app_item_$phonePkg")
+        phoneNode.performScrollTo().assertIsDisplayed()
+
+        // Rapidly click the Phone app icon 10 times in a row — must not crash or leave lock screen
+        repeat(10) {
+            phoneNode.performClick()
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("strict_phone_lock_overlay").assertIsDisplayed()
+        com.example.service.PhoneLockOverlayManager.resetLaunchGuardState()
+    }
+
+    @Test
+    fun `DynamicSpotIslandOverlay is hidden when app is open and displays outside the app with expand and collapse`() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val runningTimerState = com.example.service.TimerState(
+            phase = com.example.service.Phase.FOCUS,
+            isRunning = true,
+            focusDurationMs = 50 * 60_000L,
+            remainingMs = (48 * 60 + 31) * 1000L
+        )
+        com.example.service.FloatingFocusBubbleManager.syncTimerState(context, runningTimerState)
+        com.example.service.FloatingFocusBubbleManager.collapseIsland(context)
+
+        val inForegroundState = androidx.compose.runtime.mutableStateOf(true)
+
+        composeRule.setContent {
+            FocusIslandTheme(themeMode = ThemeMode.DARK) {
+                com.example.ui.components.DynamicSpotIslandOverlay(
+                    activeInvite = null,
+                    activeNudge = null,
+                    myUid = "user_me",
+                    isPhoneLockActive = false,
+                    isOnFocusSaverRoute = false,
+                    onAcceptInvite = {},
+                    onDeclineInvite = {},
+                    onHideInvite = {},
+                    onReturnFromNudge = {},
+                    onDismissNudge = {},
+                    onOpenFocusTab = {},
+                    onOpenChallengesTab = {},
+                    isAppInForeground = inForegroundState.value,
+                    timerState = runningTimerState
+                )
+            }
+        }
+
+        // 1. While the app is open (isAppInForeground = true), the Dynamic Island does NOT show
+        composeRule.onNodeWithTag("dynamic_island_pill").assertDoesNotExist()
+        composeRule.onNodeWithTag("dynamic_island_expanded_card").assertDoesNotExist()
+
+        // 2. When leaving the app (isAppInForeground = false), the compact pill appears with the live timer
+        inForegroundState.value = false
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("dynamic_island_pill").assertIsDisplayed()
+        composeRule.onNodeWithTag("dynamic_island_compact_clock", useUnmergedTree = true).assertIsDisplayed()
+
+        // 3. Tap compact pill to expand into the dynamicSpot control card
+        composeRule.onNodeWithTag("dynamic_island_pill").performClick()
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("dynamic_island_expanded_card").assertIsDisplayed()
+        composeRule.onNodeWithTag("dynamic_island_pause_resume_button").assertIsDisplayed()
+        composeRule.onNodeWithTag("dynamic_island_skip_button").assertIsDisplayed()
+        composeRule.onNodeWithTag("dynamic_island_end_button").assertIsDisplayed()
+
+        // 4. Tap outside the expanded card to collapse back to the compact pill
+        composeRule.onNodeWithTag("dynamic_island_outside_scrim").performClick()
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("dynamic_island_pill").assertIsDisplayed()
+
+        // Reset back to idle
+        com.example.service.FloatingFocusBubbleManager.syncTimerState(
+            context,
+            com.example.service.TimerState()
+        )
+    }
+}
+
+
+
+

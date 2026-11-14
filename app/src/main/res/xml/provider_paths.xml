@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Only the folders the app actually shares: backup exports (cache) and card media. -->
+<paths>
+    <cache-path name="cache" path="." />
+    <files-path name="revision_media" path="revision_media/" />
+    <files-path name="restored_media" path="revisions_media/" />
+</paths>

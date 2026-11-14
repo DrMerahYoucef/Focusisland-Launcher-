@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="wgt_surface_base">#0C1513</color>
+    <color name="wgt_hue_veil_base">#0E3B37</color>
+    <color name="wgt_rim_base">#FFFFFF</color>
+
+    <color name="wgt_on_surface">#E6F0EE</color>
+    <color name="wgt_on_surface_variant">#C2CDCA</color>
+    <color name="wgt_accent">#8BD5CD</color>
+    <color name="wgt_accent_soft">#5FB5AB</color>
+    <color name="wgt_secondary">#F6BE48</color>
+    <color name="wgt_critical">#FFB4A7</color>
+    <color name="wgt_track">#34433F</color>
+</resources>

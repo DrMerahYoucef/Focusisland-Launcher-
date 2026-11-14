@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <corners android:radius="@dimen/wgt_card_radius" />
+            <solid android:color="@color/wgt_surface" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <corners android:radius="@dimen/wgt_card_radius" />
+            <solid android:color="@color/wgt_hue_veil" />
+        </shape>
+    </item>
+</layer-list>
